@@ -13,6 +13,7 @@
 // Общие функции.
 long** read_matrix(char* path, long& n, long& m);
 void clean_matrix(long** matrix, const long n);
+void clean_matrix(double** matrix, const long n);
 const void print_matrix(long** matrix, const long n, const long m);
 const void print_matrix(double** matrix, const long n, const long m);
 void null_matrix(long** matrix, const long n, const long m);
@@ -21,7 +22,6 @@ void null_matrix(long** matrix, const long n, const long m);
 long number_of_threads = 1;
 
 // Семафоры и мьютексы для сихронизации.
-pthread_mutex_t mutex;
 sem_t semaphore;
 sem_t semaphore_2;
 pthread_mutex_t** mutexes;
@@ -139,14 +139,24 @@ int main(int argc, char* argv[]) {
             return -1;
     }
 
+
+    // Считываем количество потоков для работы, если задано.
+    if (argc >= 4)
+        number_of_threads = strtol(argv[3], NULL, 10);
+        
+    // Выделяем память под потоки.
+    pthread_t* thread_handles = (pthread_t*)malloc(number_of_threads * sizeof(pthread_t));
+
+    // Инициализируем переменные для замера вермени.
+    std::chrono::time_point<std::chrono::steady_clock> begin, end;
+
     // Проверка на то, что матрицы могут быть умножены. 
     if (m_1 != n_2) {
         std::cout << "Matrix sizes not valid! Work was stopped. Let's try QR decomposition..." << std::endl;
         clean_matrix(matrix_1, n_1);
         clean_matrix(matrix_2, n_2);
     } else {
-        std::cout << std::fixed << std::setprecision(2);
-
+        // Добавлям матрицы в структуру.
         matrix* matrix_struct_1 = (matrix*)malloc(sizeof(matrix));
         matrix* matrix_struct_2 = (matrix*)malloc(sizeof(matrix));
 
@@ -158,51 +168,34 @@ int main(int argc, char* argv[]) {
         matrix_struct_2->n = n_2;
         matrix_struct_2->m = m_2;
 
+        // Создаём результирующую матрицу для построчного умножения.
         long** result_matrix = nullptr;
         result_matrix = (long**)calloc(n_1, sizeof(long*));
         for (long i = 0; i < n_1; ++i) {
             result_matrix[i] = (long*)calloc(m_2, sizeof(long));
         }
 
+        // Создаём результирующую матрицу для блочного умножения.
         long** result_matrix_2 = nullptr;
         result_matrix_2 = (long**)calloc(n_1, sizeof(long*));
         for (long i = 0; i < n_1; ++i) {
             result_matrix_2[i] = (long*)calloc(m_2, sizeof(long));
         }
 
+        // Создаём результрующую матрицу для блочного умножения.
         long** result_matrix_3 = nullptr;
         result_matrix_3 = (long**)calloc(n_1, sizeof(long*));
         for (long i = 0; i < n_1; ++i) {
             result_matrix_3[i] = (long*)calloc(m_2, sizeof(long));
         }
 
+        // Добавляем аргументы для многопотчоного режима.
         Matrix_pair.matrix_1 = matrix_struct_1;
         Matrix_pair.matrix_2 = matrix_struct_2;
         Matrix_pair.result_matrix = result_matrix;
 
 
-        if (argc >= 4)
-            number_of_threads = strtol(argv[3], NULL, 10);
-
-        std::chrono::time_point<std::chrono::steady_clock> begin, end;
-
-        //print_matrix(matrix_1, n_1, m_1);
-        //print_matrix(matrix_2, n_2, m_2);
-
-        pthread_t* thread_handles = (pthread_t*)malloc(number_of_threads * sizeof(pthread_t));
-        sem_init(&semaphore, 0, 0);
-        sem_init(&semaphore_2, 0, 0);
-        semaphores = (sem_t**)malloc(n_1 * sizeof(sem_t*));
-        mutexes = (pthread_mutex_t**)malloc(n_1 * sizeof(pthread_mutex_t*));
-        for (int i = 0; i < n_1; ++i) {
-            semaphores[i] = (sem_t*)malloc(m_2 * sizeof(sem_t));
-            mutexes[i] = (pthread_mutex_t*)malloc(m_2 * sizeof(pthread_mutex_t));
-            for (int j = 0; j < m_2; ++j) {
-                sem_init(&semaphores[i][j], 0, 0);
-                pthread_mutex_init(&mutexes[i][j], NULL);
-            }  
-        }  
-
+        // Измеряем время для умножения матриц по строкам. (Принято за идеал умножения по точности)
         begin = std::chrono::steady_clock::now();
         for(long thread = 0; thread < number_of_threads; ++thread)
             pthread_create(&thread_handles[thread], NULL, Routine_rows, (void*)thread);                          
@@ -212,22 +205,32 @@ int main(int argc, char* argv[]) {
             pthread_join(thread_handles[thread], NULL);
         }
         end = std::chrono::steady_clock::now();
-        std::cout << "The time: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms\n";
+        std::cout << "The time rows: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms\n";
 
-        //print_matrix(result_matrix, n_1, m_2);
-        //print_matrix(Matrix_pair.result_matrix, n_1, m_2);
-        //clean_matrix(result_matrix, m_1);
-        //null_matrix(result_matrix, n_1, m_2);
-
+        // Меняем результирующую матрицу.
         Matrix_pair.result_matrix = result_matrix_2;
 
-        pthread_mutex_init(&mutex, NULL);
+        // Создаём и инициализируем n_1 * m_2 мьютексов (с запасом) для борьбы с гонкой данных.
+        mutexes = (pthread_mutex_t**)malloc(n_1 * sizeof(pthread_mutex_t*));
+        for (int i = 0; i < n_1; ++i) {
+            mutexes[i] = (pthread_mutex_t*)malloc(m_2 * sizeof(pthread_mutex_t));
+            for (int j = 0; j < m_2; ++j) {
+                pthread_mutex_init(&mutexes[i][j], NULL);
+            }  
+        }
+
+        // Замеряем время для блочного уможния.
         begin = std::chrono::steady_clock::now();
-        if (number_of_threads <= n_1 * m_2) {
-            for(long thread = 0; thread < number_of_threads; ++thread)
+        // Количество блоков == количество потоков + 1, но более чем число ячеек в матрице.
+        // Умножение работает корректно только для квадратных матриц.
+        // Доработка до полной произвольности может занять слишком много времени.
+        if (n_1 == n_2 && n_1 == m_1 && m_1 == m_2) {
+            long n_o_t = number_of_threads;
+            if (number_of_threads > n_1 * m_1) n_o_t = n_1 * m_1;
+            for(long thread = 0; thread < n_o_t; ++thread)
                 pthread_create(&thread_handles[thread], NULL, Routine_blocks, (void*)thread);                          
 
-            for(long thread = 0; thread < number_of_threads; ++thread)
+            for(long thread = 0; thread < n_o_t; ++thread)
             {
                 pthread_join(thread_handles[thread], NULL);
             }
@@ -236,13 +239,9 @@ int main(int argc, char* argv[]) {
             std::cout << "Oooops problem whith matrix size for blocks methods!" << std::endl;
         }
         end = std::chrono::steady_clock::now();
-        std::cout << "The time: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms\n";
-        //clean_boarders();
+        std::cout << "The time blocks: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms\n";
 
-        //print_matrix(result_matrix, n_1, m_2);
-        //clean_matrix(result_matrix, m_1);
-        //null_matrix(result_matrix, n_1, m_2);
-
+        // Меняем результрующую матрицу для умножения по столбцам.
         Matrix_pair.result_matrix = result_matrix_3;
         begin = std::chrono::steady_clock::now();
         for(long thread = 0; thread < number_of_threads; ++thread)
@@ -253,21 +252,18 @@ int main(int argc, char* argv[]) {
             pthread_join(thread_handles[thread], NULL);
         }
         end = std::chrono::steady_clock::now();
-        std::cout << "The time: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms\n";
+        std::cout << "The time columns: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms\n";
 
-
-        //print_matrix(result_matrix, n_1, m_2);
-        //print_matrix(result_matrix_2, n_1, m_2);
-        //print_matrix(result_matrix_3, n_1, m_2);
-
-
+        // Очищаем мьютексы.
         for (int i = 0; i < n_1; ++i) {
             for (int j = 0; j < m_2; ++j) {
-                sem_destroy(&semaphores[i][j]);
                 pthread_mutex_destroy(&mutexes[i][j]);
-            }  
+            }
+            free(mutexes[i]);
         }
+        free(mutexes);
 
+        // Подсчёт количества ошибок между строчным методом и блочным.
         long error_count = 0;
         for (long i = 0; i < n_1; ++i) {
             for (long j = 0; j < m_2; ++j) {
@@ -277,8 +273,9 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
-        std::cout << "Errors 1 vs 2: " << error_count << ", From: " << n_1*m_2 << std::endl;
+        std::cout << "Errors rows vs blocks: " << error_count << ", From: " << n_1*m_2 << std::endl;
 
+        // Подсчёт количества ошибок между строчным методом и столбчатным.
         error_count = 0;
         for (long i = 0; i < n_1; ++i) {
             for (long j = 0; j < m_2; ++j) {
@@ -287,9 +284,25 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
-        std::cout << "Errors 1 vs 3: " << error_count << ", From: " << n_1*m_2 << std::endl;
+        std::cout << "Errors rows vs columns: " << error_count << ", From: " << n_1*m_2 << std::endl;
+
+        // Очищаем матрицы.
+        clean_matrix(result_matrix, n_1);
+        clean_matrix(result_matrix_2, n_1);
+        clean_matrix(result_matrix_3, n_1);
+
+        //free(matrix_struct_1);
+        //free(matrix_struct_2);
     }
 
+    //////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // QR разложение. //
+    /////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    
+    // Определяем точность вывода.
+    std::cout << std::fixed << std::setprecision(2);
+
+    // Переводим long матрицу в double.
     double** double_matrix;
     double_matrix = (double**)matrix_1;
     for (long i = 0; i < n_1; ++i) {
@@ -299,50 +312,60 @@ int main(int argc, char* argv[]) {
         }
     }
 
-
+    // Создадим и инициализируем структуру для многопоточности.
     matrix_double* vectors = (matrix_double*)malloc(sizeof(double_matrix));
     vectors->matrix = double_matrix;
     vectors->n = n_1;
     vectors->m = m_1;
+
+    // Инициализируем симафоры.
+    sem_init(&semaphore, 0, 0);
+    sem_init(&semaphore_2, 0, 0);
+
+    // Запускаем функцию для QR разложения с одной критичной зоной.
     begin = std::chrono::steady_clock::now();
     QR(vectors, thread_handles);
     end = std::chrono::steady_clock::now();
-    std::cout << "The time: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms\n";
 
-    pthread_mutex_destroy(&mutex);
+    std::cout << "The time QR: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << " ms\n";
 
+    // Создание матрицы, которая должна быть идентична входящей для проверки разложения A=QR.
     double** test_matrix = (double**)calloc(vectors->n, sizeof(double*));
     for (long i = 0; i < vectors->n; ++i) {
         test_matrix[i] = (double*)calloc(vectors->m, sizeof(double));
     }
 
-
+    // QR умножение построчно.
     for(long row_1 = 0; row_1 < vectors->m; ++row_1) 
         for(long column_2 = 0; column_2 < vectors->m; ++column_2) 
             for(long column_1 = 0; column_1 < vectors->n; ++column_1) {
                 test_matrix[row_1][column_2] += QR_matrix.Q[row_1][column_1] * QR_matrix.R[column_1][column_2];
             }
 
-    std::cout << "TEST" << std::endl;
-    print_matrix(test_matrix, vectors->m, vectors->m);
+    std::cout << "TEST matrix" << std::endl;
+    // Вывод полученной матрицы.
+    //print_matrix(test_matrix, vectors->m, vectors->m);
 
-    print_matrix(QR_matrix.Q, n_1, m_1);
-    print_matrix(QR_matrix.R, n_1, m_1);
+    // Вывед QR матриц.
+    //print_matrix(QR_matrix.Q, n_1, m_1);
+    //print_matrix(QR_matrix.R, n_1, m_1);
 
-
+    // Очиаем семафоры.
     sem_destroy(&semaphore);
     sem_destroy(&semaphore_2);
     
+    // Очищаем матрицы.
     clean_matrix(matrix_1, n_1);
     clean_matrix(matrix_2, n_2);
-    clean_matrix(result_matrix, n_1);
-    clean_matrix(result_matrix_2, n_1);
-    clean_matrix(result_matrix_3, n_1);
 
-    free(matrix_struct_1);
-    free(matrix_struct_2);
+    clean_matrix(QR_matrix.Q, n_1);
+    clean_matrix(QR_matrix.R, n_1);
+
+    clean_matrix(test_matrix, n_1);
+
+    //clean_matrix(double_matrix, n_1);
     free(thread_handles);
-
+    free(vectors);
     return 0;
 }
 
@@ -383,6 +406,12 @@ void clean_matrix(long** matrix, const long n) {
     free(matrix);   
 }
 
+void clean_matrix(double** matrix, const long n) {
+    for (long i = 0; i < n; ++i)
+        free(matrix[i]);
+    free(matrix);   
+}
+
 const void print_matrix(long** matrix, const long n, const long m) {
     std::cout << "==================================================" << std::endl;
     for (long i = 0; i < n; ++i) {
@@ -412,6 +441,7 @@ void null_matrix(long** matrix, const long n, const long m) {
     }   
 }
 
+// Обычное умножение матриц по строкам, с указанием конкретных строк и солбцов участвующиз в умножении.
 void sum_matrix_rows(long** matrix_1, long** matrix_2,
                      long row_1_start, long column_1_start,
                      long column_2_start, long row_1_end,
@@ -425,6 +455,8 @@ void sum_matrix_rows(long** matrix_1, long** matrix_2,
             }
 }
 
+// Умножение по столбцам, также с указанием конкртеных границ. Используется синхронизация с помощью мьютексов.
+// Происходит блокировка всей строки, так как мы взаимодействуем именно с ней.
 void sum_matrix_columns(long** matrix_1, long** matrix_2,
                      long column_1_start, long row_1_start,
                      long column_2_start, long column_1_end,
@@ -435,21 +467,14 @@ void sum_matrix_columns(long** matrix_1, long** matrix_2,
         for(long row_1 = row_1_start; row_1 < row_1_end && row_1 < Matrix_pair.matrix_1->n; ++row_1) {
              pthread_mutex_lock(&mutexes[row_1][0]);
              for(long column_2 = column_2_start; column_2 < column_2_end && column_2 < Matrix_pair.matrix_2->m; ++column_2) {
-                //sem_post(&semaphores[row_1][column_2]);
-                //pthread_mutex_lock(&mutex);
-                //pthread_mutex_lock(&mutexes[row_1][column_2]);
-                //pthread_mutex_lock(&mutexes[row_1][0]);
                 result_matrix[row_1][column_2] += matrix_1[row_1][column_1] * matrix_2[column_1][column_2];
-                //pthread_mutex_unlock(&mutexes[row_1][0]);
-                //pthread_mutex_unlock(&mutexes[row_1][column_2]);
-                //pthread_mutex_unlock(&mutex);
-                //sem_wait(&semaphores[row_1][column_2]);
              }
              pthread_mutex_unlock(&mutexes[row_1][0]);
         }
     }
 }
 
+// Блочное умножение матриц
 void sum_matrix_blocks(long** matrix_1, long** matrix_2,
             long block_row_start,
             long block_column_start,
@@ -460,13 +485,13 @@ void sum_matrix_blocks(long** matrix_1, long** matrix_2,
 
     for(long i = 0; i < block_size_n && block_row_start + i < Matrix_pair.matrix_1->n; ++i) {
         for(long j = 0; j < block_size_m && block_column_start + j < Matrix_pair.matrix_2->m; ++j) {
-            pthread_mutex_lock(&mutexes[i][j]);
+            //pthread_mutex_lock(&mutexes[i][j]);
             for(long k = 0; k < block_size_n && k < block_size_m && block_common_index + k < Matrix_pair.matrix_1->n && block_common_index + k < Matrix_pair.matrix_2->m; ++k) {
                 result_matrix[block_row_start+i][block_column_start+j] +=
                   matrix_1[block_row_start+i][block_common_index+k] *
                   matrix_2[block_common_index+k][block_column_start+j];
             }
-            pthread_mutex_unlock(&mutexes[i][j]);
+            //pthread_mutex_unlock(&mutexes[i][j]);
         }
     }
 }
@@ -556,44 +581,6 @@ void* Routine_blocks(void* rank) {
     if (first_row < save_first_row)
         sum_matrix_rows(Matrix_pair.matrix_1->matrix, Matrix_pair.matrix_2->matrix, first_row, 0, block_column_start + block_size_m, last_row, Matrix_pair.matrix_1->m, column_index, Matrix_pair.result_matrix);
 
-    // long last_column_index = block_column_start + block_size_m - 1;
-    // columns = Matrix_pair.matrix_1->m - (last_column_index + 1);
-    // number_of_columns = columns / number_of_threads;
-    // if (number_of_columns == 0)
-    //     number_of_columns = 1;
-
-    // first_column = last_column_index + current_rank * number_of_columns;
-    // last_column = last_column_index + (current_rank + 1) * number_of_columns;
-
-    // if (last_column > column_index)
-    //     last_column = column_index;    
-
-    // if (first_column < column_index)
-
-    //     sum_matrix_columns(Matrix_pair.matrix_1->matrix, Matrix_pair.matrix_2->matrix, first_column, block_row_start, last_column, Matrix_pair.matrix_1->m, first_row, column_index, Matrix_pair.result_matrix);
-    // if (current_rank == (number_of_threads-1) && last_row < save_first_row)
-    //     last_row = save_first_row;
-
-    // sum_matrix_rows(Matrix_pair.matrix_1->matrix, Matrix_pair.matrix_2->matrix, first_row, first_column, 0, last_row,
-    //                 Matrix_pair.matrix_1->m, Matrix_pair.matrix_2->m, Matrix_pair.result_matrix);
-    // for (long i = current_rank; i < current_rank+1; ++i) {
-    //     for (long j = current_rank; j < current_rank+1; ++j) {
-    //         for (long c = current_rank; c < current_rank+1; ++c) {
-    //             pthread_mutex_lock(&mutex);
-    //             sum_matrix_rows(Matrix_pair.matrix_1->matrix, Matrix_pair.matrix_2->matrix, 
-    //                             boarders_row_1[i], boarders_column_1[j], boarders_column_2[c],
-    //                             boarders_row_1[i+1], boarders_column_1[j+1], boarders_column_2[c+1],
-    //                             Matrix_pair.result_matrix);
-    //             std::cout << boarders_row_1[i] << ' ' << boarders_column_1[j] << ' ' << boarders_column_2[c] << " ends: " <<
-    //                          boarders_row_1[i+1] << ' ' << boarders_column_1[j+1] << ' ' << boarders_column_2[c+1] << " runk: " << current_rank << std::endl;
-    //             pthread_mutex_unlock(&mutex);
-    //         }
-    //     }
-    // }
-    // sum_matrix_rows(Matrix_pair.matrix_1->matrix, Matrix_pair.matrix_2->matrix, 
-    //                 boarders_row_1[current_rank], boarders_column_1[current_rank], boarders_column_2[current_rank],
-    //                 boarders_row_1[current_rank+1], boarders_column_1[current_rank+1], boarders_column_2[current_rank+1],
-    //                 Matrix_pair.result_matrix); 
     return NULL;
 }
 
@@ -633,59 +620,6 @@ void* Routine_columns(void* rank) {
 
     return NULL;
 }
-
-void calculate_boarders(long n_1, long m_1, long m_2) {
-    long blocks_num = number_of_threads;
-    boarders_row_1 = (long*)calloc(blocks_num+1, sizeof(long));
-    boarders_column_1 = (long*)calloc(blocks_num+1, sizeof(long));
-    boarders_column_2 = (long*)calloc(blocks_num+1, sizeof(long));
-    int i = 0;
-    long board = 0;
-    long block_row_1_size = n_1 / blocks_num;
-    long block_column_1_size = m_1 / blocks_num;
-    long block_column_2_size = m_2 / blocks_num;
-
-    while (i != blocks_num && board < n_1) {
-        boarders_row_1[i] = board;
-        ++i;
-        board += block_row_1_size;
-        if (i == blocks_num) {
-            boarders_row_1[blocks_num] = n_1;
-            break;
-        }
-    }
-
-    board = 0;
-    i = 0;
-    while (i != blocks_num && board < m_1) {
-        boarders_column_1[i] = board;
-        ++i;
-        board += block_column_1_size;
-        if (i == blocks_num) {
-            boarders_column_1[blocks_num] = m_1;
-            break;
-        }
-    }
-
-    board = 0;
-    i = 0;
-    while (i != blocks_num && board < m_2) {
-        boarders_column_2[i] = board;
-        ++i;
-        board += block_column_2_size;
-        if (i == blocks_num) {
-            boarders_column_2[blocks_num] = m_2;
-            break;
-        }
-    }
-}
-
-void clean_boarders() {
-    free(boarders_row_1);
-    free(boarders_column_1);
-    free(boarders_column_2);
-}
-
 
 position* get_position(long current_rank, long block_size_m, long block_size_n) {
     long block_column_start = 0;
@@ -849,15 +783,6 @@ void* Routine_QR(void* rank) {
         }
     }
 
-    //line_size = Matrixes_Q.matrix_2->n / number_of_threads;
-    //if (line_size == 0) line_size = 1;
-    //start_line = current_rank * line_size;
-    //end_line = (current_rank + 1) * line_size;
-
-    //if (current_rank == number_of_threads - 1)
-        //end_line = Matrixes_Q.matrix_2->n;
-
-
     for(long row_1 = start_column; row_1 < end_column && row_1 < Matrixes_Q.matrix_2->m; ++row_1) 
         for(long column_2 = 0; column_2 < Matrix_for_QR.matrix_1->m; ++column_2) 
             for(long column_1 = 0; column_1 < Matrixes_Q.matrix_2->m; ++column_1) {
@@ -865,22 +790,4 @@ void* Routine_QR(void* rank) {
             }
 
     return NULL;
-}
-
-void* Routine_norm(void* rank) {
-
-    long current_rank = (long)rank;
-    return NULL;
-
-}
-
-
-void* Routine_init(void* rank) {
-
-    long current_rank = (long)rank;
-
-    return NULL;
-
-        
-
 }
