@@ -160,8 +160,6 @@ int main(int argc, char* argv[]) {
     // Проверка на то, что матрицы могут быть умножены. 
     if (m_1 != n_2) {
         std::cout << "Matrix sizes not valid! Work was stopped. Let's try QR decomposition..." << std::endl;
-        clean_matrix(matrix_1, n_1);
-        clean_matrix(matrix_2, n_2);
     } else {
         // Добавлям матрицы в структуру.
         matrix* matrix_struct_1 = (matrix*)malloc(sizeof(matrix));
@@ -275,7 +273,7 @@ int main(int argc, char* argv[]) {
         for (long i = 0; i < n_1; ++i) {
             for (long j = 0; j < m_2; ++j) {
                 if (result_matrix[i][j] != result_matrix_2[i][j]) {
-                    std::cout << result_matrix[i][j] << " vs " << result_matrix_2[i][j] << std::endl;
+                    //std::cout << result_matrix[i][j] << " vs " << result_matrix_2[i][j] << std::endl;
                     ++error_count;
                 }
             }
@@ -344,7 +342,7 @@ int main(int argc, char* argv[]) {
         test_matrix[i] = (double*)calloc(vectors->m, sizeof(double));
     }
 
-    // QR умножение построчно.
+    //QR умножение построчно.
     for(long row_1 = 0; row_1 < vectors->m; ++row_1) 
         for(long column_2 = 0; column_2 < vectors->m; ++column_2) 
             for(long column_1 = 0; column_1 < vectors->n; ++column_1) {
@@ -474,11 +472,11 @@ void sum_matrix_columns(long** matrix_1, long** matrix_2,
     
     for(long column_1 = column_1_start; column_1 < column_1_end && column_1 < Matrix_pair.matrix_1->m; ++column_1) {
         for(long row_1 = row_1_start; row_1 < row_1_end && row_1 < Matrix_pair.matrix_1->n; ++row_1) {
-             //pthread_mutex_lock(&mutexes[row_1][0]);
+             pthread_mutex_lock(&mutexes[row_1][0]);
              for(long column_2 = column_2_start; column_2 < column_2_end && column_2 < Matrix_pair.matrix_2->m; ++column_2) {
                 result_matrix[row_1][column_2] += matrix_1[row_1][column_1] * matrix_2[column_1][column_2];
              }
-             //pthread_mutex_unlock(&mutexes[row_1][0]);
+             pthread_mutex_unlock(&mutexes[row_1][0]);
         }
     }
 }
@@ -742,22 +740,22 @@ void QR(matrix_double* vectors, pthread_t* thread_handles) {
     }
 
     // Высчитываем проекции паралельно (пока работает не стабильно) и выполняем последовательные вычитания.
-    //pthread_t* thread_handlers = (pthread_t*)malloc(number_of_threads * sizeof(pthread_t));
-    //Projs.projes = (double**)calloc((vectors->m - 1), sizeof(double*));
+    pthread_t* thread_handlers = (pthread_t*)malloc(number_of_threads * sizeof(pthread_t));
+    Projs.projes = (double**)calloc((vectors->m - 1), sizeof(double*));
     for (long j = 0; j < vectors->m; ++j) {
-        //Projs.j = j;
-        //for(long thread = number_of_threads; thread < number_of_threads + number_of_threads; ++thread)
-            //pthread_create(&thread_handlers[thread], NULL, Routine_proj, (void*)thread);                          
+        Projs.j = j;
+        for(long thread = number_of_threads; thread < number_of_threads + number_of_threads; ++thread)
+            pthread_create(&thread_handlers[thread], NULL, Routine_proj, (void*)thread);                          
 
-        //for(long thread = number_of_threads; thread < number_of_threads + number_of_threads; ++thread)
-        //{
-        //    pthread_join(thread_handlers[thread], NULL);
-        //}
+        for(long thread = number_of_threads; thread < number_of_threads + number_of_threads; ++thread)
+        {
+           pthread_join(thread_handlers[thread], NULL);
+        }
         for (long i = 0; i < j; ++i) {
-            //double* proj = Projs.projes[i];
-            double* proj = column_proj(Matrix_for_QR.matrix_2, Matrix_for_QR.matrix_1, i, j);
+            double* proj = Projs.projes[i];
+            //double* proj = column_proj(Matrix_for_QR.matrix_2, Matrix_for_QR.matrix_1, i, j);
             vector_subtraction(updated_matrix, j, proj);
-            free(proj);
+            //free(proj);
         }
     }
     //free(thread_handlers);
