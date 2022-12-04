@@ -113,6 +113,13 @@ double* column_proj(matrix_double* b, matrix_double* a, long column_i, long colu
 void QR(matrix_double* vectors, pthread_t* pthread_handler);                                                             //
 void vector_subtraction(matrix_double* vectors, long column_i, double* second_vector);                                   //
 void* Routine_QR(void* rank);                                                                                            //
+struct projects                                                                                                          //
+{                                                                                                                        //
+    double** projes;                                                                                                     //
+    long j;                                                                                                              //
+}Projs;                                                                                                                  //
+                                                                                                                         //
+void* Routine_proj(void* rank);                                                                                          //
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 int main(int argc, char* argv[]) {
@@ -286,6 +293,8 @@ int main(int argc, char* argv[]) {
         }
         std::cout << "Errors rows vs columns: " << error_count << ", From: " << n_1*m_2 << std::endl;
 
+        //print_matrix(result_matrix_2, n_1, m_2);
+
         // Очищаем матрицы.
         clean_matrix(result_matrix, n_1);
         clean_matrix(result_matrix_2, n_1);
@@ -358,8 +367,8 @@ int main(int argc, char* argv[]) {
     clean_matrix(matrix_1, n_1);
     clean_matrix(matrix_2, n_2);
 
-    clean_matrix(QR_matrix.Q, n_1);
-    clean_matrix(QR_matrix.R, n_1);
+    //clean_matrix(QR_matrix.Q, n_1);
+    //clean_matrix(QR_matrix.R, n_1);
 
     clean_matrix(test_matrix, n_1);
 
@@ -465,16 +474,16 @@ void sum_matrix_columns(long** matrix_1, long** matrix_2,
     
     for(long column_1 = column_1_start; column_1 < column_1_end && column_1 < Matrix_pair.matrix_1->m; ++column_1) {
         for(long row_1 = row_1_start; row_1 < row_1_end && row_1 < Matrix_pair.matrix_1->n; ++row_1) {
-             pthread_mutex_lock(&mutexes[row_1][0]);
+             //pthread_mutex_lock(&mutexes[row_1][0]);
              for(long column_2 = column_2_start; column_2 < column_2_end && column_2 < Matrix_pair.matrix_2->m; ++column_2) {
                 result_matrix[row_1][column_2] += matrix_1[row_1][column_1] * matrix_2[column_1][column_2];
              }
-             pthread_mutex_unlock(&mutexes[row_1][0]);
+             //pthread_mutex_unlock(&mutexes[row_1][0]);
         }
     }
 }
 
-// Блочное умножение матриц
+// Блочное умножение матриц, после дополнительных тестов, мьютексы оказались не нужны.
 void sum_matrix_blocks(long** matrix_1, long** matrix_2,
             long block_row_start,
             long block_column_start,
@@ -485,105 +494,18 @@ void sum_matrix_blocks(long** matrix_1, long** matrix_2,
 
     for(long i = 0; i < block_size_n && block_row_start + i < Matrix_pair.matrix_1->n; ++i) {
         for(long j = 0; j < block_size_m && block_column_start + j < Matrix_pair.matrix_2->m; ++j) {
-            //pthread_mutex_lock(&mutexes[i][j]);
+            pthread_mutex_lock(&mutexes[i][j]);
             for(long k = 0; k < block_size_n && k < block_size_m && block_common_index + k < Matrix_pair.matrix_1->n && block_common_index + k < Matrix_pair.matrix_2->m; ++k) {
                 result_matrix[block_row_start+i][block_column_start+j] +=
                   matrix_1[block_row_start+i][block_common_index+k] *
                   matrix_2[block_common_index+k][block_column_start+j];
             }
-            //pthread_mutex_unlock(&mutexes[i][j]);
+            pthread_mutex_unlock(&mutexes[i][j]);
         }
     }
 }
 
-void* Routine_blocks(void* rank) {
-    long current_rank = (long)rank;
-    long max_rank = number_of_threads-1;
-    long block_size = long(sqrt(double(number_of_threads)));
-    long block_size_n = Matrix_pair.matrix_1->n / block_size;
-    long block_size_m = Matrix_pair.matrix_1->m / block_size;
-
-    if (!block_size_n) block_size_n = 1;
-    if (!block_size_m) block_size_m = 1;
-
-    long block_row_start = 0;
-    long block_column_start = 0;
-    long block_common_index = 0;
-
-    // block_row_start = (current_rank / number_of_threads) * block_size_n;
-    // block_column_start = (current_rank % number_of_threads)* block_size_m;
-
-    position* current_position = get_position(current_rank, block_size_m, block_size_n);
-    block_row_start = current_position->x;
-    block_column_start = current_position->y;
-    free(current_position);
-
-    for (block_common_index; block_common_index < Matrix_pair.matrix_1->n && block_common_index < Matrix_pair.matrix_2->m; block_common_index += std::min(block_size_n, block_size_m)) {
-        sum_matrix_blocks(Matrix_pair.matrix_1->matrix,
-                          Matrix_pair.matrix_2->matrix,
-                          block_row_start,
-                          block_column_start,
-                          block_common_index,
-                          block_size_n,
-                          block_size_m,
-                          Matrix_pair.result_matrix);
-    }
-
-
-
-    current_position = get_position(number_of_threads-1, block_size_m, block_size_n);
-    block_row_start = current_position->x;
-    block_column_start = current_position->y;
-
-    free(current_position);
-
-    long rows = Matrix_pair.matrix_1->n - (block_row_start + block_size_n + 1);
-    int number_of_rows = rows / number_of_threads;
-    long first_row = (block_row_start + block_size_n) + current_rank * number_of_rows;
-    long last_row = (block_row_start + block_size_n) + (current_rank + 1) * number_of_rows;
-
-    if (current_rank == (number_of_threads-1) && last_row < Matrix_pair.matrix_1->n)
-        last_row = Matrix_pair.matrix_1->n;
-
-    sum_matrix_rows(Matrix_pair.matrix_1->matrix, Matrix_pair.matrix_2->matrix, first_row, 0, 0, last_row,
-                    Matrix_pair.matrix_1->m, Matrix_pair.matrix_2->m, Matrix_pair.result_matrix);
-
-    // rows = block_row_start + block_size_n + 1;
-    // number_of_rows = rows / number_of_threads;
-    // long save_first_row = first_row;
-    // first_row = current_rank * number_of_rows;
-    // last_row = (current_rank + 1) * number_of_rows;
-
-    long column_index = Matrix_pair.matrix_1->m - (Matrix_pair.matrix_1->m % block_size_m);
-    long columns = Matrix_pair.matrix_1->m - (column_index + 1);
-
-    int number_of_columns = columns / number_of_threads;
-    long first_column = column_index + current_rank * number_of_columns;
-    long last_column = column_index + (current_rank + 1) * number_of_columns;
-
-    if (current_rank == (number_of_threads-1) && last_column < Matrix_pair.matrix_1->m)
-        last_column = Matrix_pair.matrix_1->m;
-
-    sum_matrix_columns(Matrix_pair.matrix_1->matrix, Matrix_pair.matrix_2->matrix, 0, 0, first_column, Matrix_pair.matrix_1->m, first_row, last_column, Matrix_pair.result_matrix);
-
-    rows = block_size_n; 
-    number_of_rows = rows / number_of_threads;
-    if (number_of_rows == 0)
-        number_of_rows = 1;
-
-    long save_first_row = first_row;
-    first_row = block_row_start + current_rank * number_of_rows;
-    last_row = block_row_start + (current_rank + 1) * number_of_rows;
-
-    if (current_rank == max_rank && last_row < save_first_row)
-        last_row = save_first_row;
-
-    if (first_row < save_first_row)
-        sum_matrix_rows(Matrix_pair.matrix_1->matrix, Matrix_pair.matrix_2->matrix, first_row, 0, block_column_start + block_size_m, last_row, Matrix_pair.matrix_1->m, column_index, Matrix_pair.result_matrix);
-
-    return NULL;
-}
-
+// Распределение строк между потоками.
 void* Routine_rows(void* rank) {
 
     long rows = Matrix_pair.matrix_1->n;
@@ -602,7 +524,7 @@ void* Routine_rows(void* rank) {
     return NULL;
 }
 
-
+// Распределение столбцов между потоками
 void* Routine_columns(void* rank) {
 
     long columns = Matrix_pair.matrix_1->m;
@@ -621,6 +543,108 @@ void* Routine_columns(void* rank) {
     return NULL;
 }
 
+void* Routine_blocks(void* rank) {
+    long current_rank = (long)rank;
+
+    // Определеяем средний размер блока.
+
+    long block_size = long(sqrt(double(number_of_threads)));
+    long block_size_n = Matrix_pair.matrix_1->n / block_size;
+    long block_size_m = Matrix_pair.matrix_1->m / block_size;
+
+    if (!block_size_n) block_size_n = 1;
+    if (!block_size_m) block_size_m = 1;
+
+
+    // Определяем стартовую позицию для конкретного блока.
+    long block_row_start = 0;
+    long block_column_start = 0;
+    long block_common_index = 0;
+
+    position* current_position = get_position(current_rank, block_size_m, block_size_n);
+    block_row_start = current_position->x;
+    block_column_start = current_position->y;
+    free(current_position);
+
+    // Выполняем расчёты для блоков.
+    for (block_common_index; block_common_index < Matrix_pair.matrix_1->n && block_common_index < Matrix_pair.matrix_2->m; block_common_index += std::min(block_size_n, block_size_m)) {
+        sum_matrix_blocks(Matrix_pair.matrix_1->matrix,
+                          Matrix_pair.matrix_2->matrix,
+                          block_row_start,
+                          block_column_start,
+                          block_common_index,
+                          block_size_n,
+                          block_size_m,
+                          Matrix_pair.result_matrix);
+    }
+
+
+    // Определяем позицю последнего блока.
+    current_position = get_position(number_of_threads-1, block_size_m, block_size_n);
+    block_row_start = current_position->x;
+    block_column_start = current_position->y;
+
+    free(current_position);
+
+    // Расчитываем количество строк для досчёта n % block_size_n, определяем их стратовую позицию.
+    long rows = Matrix_pair.matrix_1->n - (block_row_start + block_size_n + 1);
+    int number_of_rows = rows / number_of_threads;
+    // Распределяем строки  между потоками.
+    long first_row = (block_row_start + block_size_n) + current_rank * number_of_rows;
+    long last_row = (block_row_start + block_size_n) + (current_rank + 1) * number_of_rows;
+
+    if (current_rank == (number_of_threads-1) && last_row < Matrix_pair.matrix_1->n)
+        last_row = Matrix_pair.matrix_1->n;
+
+    // Досчитываем оставшиеся пропуски, ЕСЛИ ЭТО НЕОБХОДИМО, иначе не пропустит проверка границ.
+    sum_matrix_rows(Matrix_pair.matrix_1->matrix, Matrix_pair.matrix_2->matrix, first_row, 0, 0, last_row,
+                    Matrix_pair.matrix_1->m, Matrix_pair.matrix_2->m, Matrix_pair.result_matrix);
+
+
+    // Определяем столбцы m % block_size_m и распределяем между потоками.
+    long column_index = Matrix_pair.matrix_1->m -(Matrix_pair.matrix_1->m % block_size_m);
+    long columns = Matrix_pair.matrix_1->m -(column_index + 1);
+
+    int number_of_columns = columns / number_of_threads;
+    if (number_of_columns == 0) number_of_columns = 1;
+    long first_column = column_index + current_rank * number_of_columns;
+    long last_column = column_index + (current_rank + 1) * number_of_columns;
+
+    if (current_rank == (number_of_threads-1)) //&& last_column < Matrix_pair.matrix_1->m)
+        last_column = Matrix_pair.matrix_1->m;
+
+    sum_matrix_columns(Matrix_pair.matrix_1->matrix, Matrix_pair.matrix_2->matrix, 0, 0, first_column, Matrix_pair.matrix_1->m, first_row, last_column, Matrix_pair.result_matrix);
+
+    rows = block_size_n; 
+    number_of_rows = rows / number_of_threads;
+    if (number_of_rows == 0)
+        number_of_rows = 1;
+
+    long save_first_row = first_row;
+    first_row = block_row_start + current_rank * number_of_rows;
+    last_row = block_row_start + (current_rank + 1) * number_of_rows;
+
+    if (current_rank == (number_of_threads - 1) && last_row < save_first_row)
+        last_row = save_first_row;
+
+    // Перемножаем построчно элементы оставшиеся на месте пустых блоков.
+    if (first_row < save_first_row)
+        sum_matrix_rows(Matrix_pair.matrix_1->matrix, Matrix_pair.matrix_2->matrix, first_row, 0, block_column_start + block_size_m, last_row, Matrix_pair.matrix_1->m, column_index, Matrix_pair.result_matrix);
+
+    // Умножаем постолбцам элементы оставшиеся между блокам.
+    // number_of_columns = Matrix_pair.matrix_1->m / number_of_threads;
+    // first_column = current_rank * number_of_columns;
+    // last_column = (current_rank + 1) * number_of_columns;
+
+    // if (first_row < save_first_row)
+    //     sum_matrix_columns(Matrix_pair.matrix_1->matrix, Matrix_pair.matrix_2->matrix, first_column, block_row_start, block_column_start + block_size_m, last_column, save_first_row, column_index, Matrix_pair.result_matrix);
+
+
+    return NULL;
+}
+
+
+// Получение позиции для блока.
 position* get_position(long current_rank, long block_size_m, long block_size_n) {
     long block_column_start = 0;
     long block_row_start = 0;
@@ -644,6 +668,12 @@ position* get_position(long current_rank, long block_size_m, long block_size_n) 
     return result;
 }
 
+
+////////
+// QR //
+////////
+
+// Скалярное умножение векторов.
 double column_scalar_multiplication(matrix_double* vectors, long column_i, matrix_double* vectors_second, long column_j) {
     double answer = 0;
     for (long i = 0; i < vectors->n; i++) {
@@ -652,7 +682,7 @@ double column_scalar_multiplication(matrix_double* vectors, long column_i, matri
     return answer;
 }
 
-
+// Вычисление проекции вектора.
 double* column_proj(matrix_double* b, matrix_double* a, long column_i, long column_j) {
     double cf = column_scalar_multiplication(a, column_j, b, column_i) / column_scalar_multiplication(b, column_i, b, column_i);
     double* proj = (double*)calloc(b->n, sizeof(double));
@@ -662,7 +692,10 @@ double* column_proj(matrix_double* b, matrix_double* a, long column_i, long colu
     return proj;
 }
 
+// QR разложение
 void QR(matrix_double* vectors, pthread_t* thread_handles) {
+
+    // Создаём b матрицу, как копию a
     matrix_double* updated_matrix = (matrix_double*)malloc(sizeof(matrix_double));
     updated_matrix->n = vectors->n;
     updated_matrix->m = vectors->m;
@@ -674,14 +707,17 @@ void QR(matrix_double* vectors, pthread_t* thread_handles) {
     Matrix_for_QR.matrix_1 = vectors;
     Matrix_for_QR.matrix_2 = updated_matrix;
 
+    // Задём указатель на b матрицу, как q матрицу. 
     QR_matrix.Q = updated_matrix->matrix;
 
+    // Выделяем память под T матрицу.
     matrix_double* Q_t = (matrix_double*)malloc(sizeof(matrix_double));
     Q_t->matrix = (double**)malloc(updated_matrix->m*sizeof(double*));
     for (long i = 0; i < updated_matrix->m; ++i) {
         Q_t->matrix[i] = (double*)malloc(updated_matrix->n*sizeof(double));
     }
 
+    // Заполняем структуры с матрциами.
     Matrixes_Q.matrix_1 = updated_matrix;
     Matrixes_Q.matrix_1->n = updated_matrix->n;
     Matrixes_Q.matrix_1->m = updated_matrix->m;
@@ -689,40 +725,56 @@ void QR(matrix_double* vectors, pthread_t* thread_handles) {
     Matrixes_Q.matrix_2->n = updated_matrix->m;
     Matrixes_Q.matrix_2->m = updated_matrix->n;
 
+    // Выделяем память по R матрицу.
     QR_matrix.R = (double**)calloc(updated_matrix->n, sizeof(double*));
     for (long i = 0; i < updated_matrix->n; ++i) {
         QR_matrix.R[i] = (double*)calloc(updated_matrix->m, sizeof(double));
     }
 
-
+    // Запускаем потоки для части вычислений.
     for(long thread = 0; thread < number_of_threads; ++thread)
         pthread_create(&thread_handles[thread], NULL, Routine_QR, (void*)thread);                          
 
+    // Ожидаем заверешения копирования матрицы.
     int counter = 0;
     for (int i = 0; i < number_of_threads; ++i) {
         sem_wait(&semaphore);
     }
 
+    // Высчитываем проекции паралельно (пока работает не стабильно) и выполняем последовательные вычитания.
+    //pthread_t* thread_handlers = (pthread_t*)malloc(number_of_threads * sizeof(pthread_t));
+    //Projs.projes = (double**)calloc((vectors->m - 1), sizeof(double*));
     for (long j = 0; j < vectors->m; ++j) {
+        //Projs.j = j;
+        //for(long thread = number_of_threads; thread < number_of_threads + number_of_threads; ++thread)
+            //pthread_create(&thread_handlers[thread], NULL, Routine_proj, (void*)thread);                          
+
+        //for(long thread = number_of_threads; thread < number_of_threads + number_of_threads; ++thread)
+        //{
+        //    pthread_join(thread_handlers[thread], NULL);
+        //}
         for (long i = 0; i < j; ++i) {
-            double* proj = column_proj(updated_matrix, vectors, i, j);
+            //double* proj = Projs.projes[i];
+            double* proj = column_proj(Matrix_for_QR.matrix_2, Matrix_for_QR.matrix_1, i, j);
             vector_subtraction(updated_matrix, j, proj);
             free(proj);
         }
     }
+    //free(thread_handlers);
+    //free(Projs.projes);
     //print_matrix(Matrix_for_QR.matrix_2->matrix, Matrix_for_QR.matrix_2->n, Matrix_for_QR.matrix_2->m);
 
+    // Возобновляем работу потоков.
     for (int i = 0; i < number_of_threads; ++i) {
         sem_post(&semaphore_2);
     } 
-
-
     for(long thread = 0; thread < number_of_threads; ++thread)
     {
         pthread_join(thread_handles[thread], NULL);
     }
 }
 
+// Вычитания векторов.
 void vector_subtraction(matrix_double* vectors, long column_i, double* second_vector) {
     for (long i = 0; i < vectors->n; ++i) {
         vectors->matrix[i][column_i] -= second_vector[i];
@@ -730,10 +782,13 @@ void vector_subtraction(matrix_double* vectors, long column_i, double* second_ve
     }
 }
 
+
+// Паралельный алгоритм для QR матрицы.
 void* Routine_QR(void* rank) {
 
     long current_rank = (long)rank;
 
+    // Определяем количество строчек для каждоого потока.
     long line_size = Matrix_for_QR.matrix_2->n / number_of_threads;
     if (line_size == 0) line_size = 1;
     long start_line = current_rank * line_size;
@@ -742,15 +797,17 @@ void* Routine_QR(void* rank) {
     if (current_rank == number_of_threads - 1)
         end_line = Matrix_for_QR.matrix_2->n;
 
-
+    // Копируем матрицу a в матрицу b.
     for (long i = start_line; i < end_line && i < Matrix_for_QR.matrix_2->n; ++i)
         for (long j = 0; j < Matrix_for_QR.matrix_2->m && j < Matrix_for_QR.matrix_2->m; ++j)  {
             Matrix_for_QR.matrix_2->matrix[i][j] = Matrix_for_QR.matrix_1->matrix[i][j];
         }
 
+    // Ожидаем заверешения расчётов проекций.
     sem_post(&semaphore);
     sem_wait(&semaphore_2);
 
+    // Определяем размер столбца для каждого потока.
     long column_size = Matrix_for_QR.matrix_2->m / number_of_threads;
     if (column_size == 0) column_size = 1;
     long start_column = current_rank * column_size;
@@ -759,6 +816,7 @@ void* Routine_QR(void* rank) {
     if (current_rank == number_of_threads - 1)
         end_column = Matrix_for_QR.matrix_2->m;
 
+    // Нормируем матрицу.
     for (long j = start_column; j < end_column && j < Matrix_for_QR.matrix_2->m; ++j) {
         double cf = sqrt(column_scalar_multiplication(Matrix_for_QR.matrix_2, j, Matrix_for_QR.matrix_2, j));
         for (long i = 0; i < Matrix_for_QR.matrix_2->n; ++i) {
@@ -766,10 +824,7 @@ void* Routine_QR(void* rank) {
         }
     }
 
-    // for (long i = start_line; i < end_line; ++i)
-    //     for (long j = 0; j < Matrix_for_QR.matrix_2->m; ++j) 
-    //         Matrix_for_QR.matrix_2->matrix[i][j] = Matrix_for_QR.matrix_1->matrix[i][j];
-
+    // Расчитываем столбцы.
     column_size = Matrixes_Q.matrix_2->m / number_of_threads;
     start_column = current_rank * column_size;
     end_column = (current_rank + 1) * column_size;
@@ -777,17 +832,35 @@ void* Routine_QR(void* rank) {
     if (current_rank == number_of_threads - 1)
         end_column = Matrixes_Q.matrix_2->m;
 
+    // Транспонируем матрицу.
     for (long j = start_column; j < end_column && j < Matrix_for_QR.matrix_2->m; ++j) {
         for (long i = 0; i < Matrixes_Q.matrix_2->n; ++i) {
             Matrixes_Q.matrix_2->matrix[j][i] = Matrixes_Q.matrix_1->matrix[i][j];
         }
     }
 
+    // Построчно паралельно умножаем матрицу QT * A, чтобы получить R матрицу.
     for(long row_1 = start_column; row_1 < end_column && row_1 < Matrixes_Q.matrix_2->m; ++row_1) 
         for(long column_2 = 0; column_2 < Matrix_for_QR.matrix_1->m; ++column_2) 
             for(long column_1 = 0; column_1 < Matrixes_Q.matrix_2->m; ++column_1) {
                 QR_matrix.R[row_1][column_2] += Matrixes_Q.matrix_2->matrix[row_1][column_1] * Matrix_for_QR.matrix_1->matrix[column_1][column_2];
             }
 
+    return NULL;
+}
+
+// Расчёт проекций и запись их в вектор, вектров проекций.
+void* Routine_proj(void* rank) {
+    long current_rank = (long)rank - number_of_threads;
+    long i_blocks = Projs.j / number_of_threads;
+    if (i_blocks == 0) i_blocks = 1;
+    long start_i = current_rank * i_blocks;
+    long end_i = (current_rank + 1) * (i_blocks);
+    if (current_rank == number_of_threads-1) {
+        end_i = Projs.j;
+    }
+    for (long i = start_i; i < end_i; ++i) {
+        Projs.projes[i] = column_proj(Matrix_for_QR.matrix_2, Matrix_for_QR.matrix_1, i, Projs.j);
+    }
     return NULL;
 }
